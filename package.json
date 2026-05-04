@@ -1,0 +1,24 @@
+{
+  "name": "chatgpt-multiplayer-shooter",
+  "version": "1.0.0",
+  "private": true,
+  "description": "In-memory multiplayer FPS prototype built with Express and WebSockets.",
+  "main": "server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "check": "node --check server.js"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "express": "^4.19.2",
+    "three": "^0.158.0",
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "playwright": "^1.59.1"
+  }
+}

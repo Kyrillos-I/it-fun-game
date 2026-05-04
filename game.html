@@ -1,0 +1,1039 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Multiplayer Shooter</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --panel: rgba(8, 12, 18, 0.78);
+      --panel-strong: rgba(7, 10, 14, 0.92);
+      --line: rgba(255, 255, 255, 0.16);
+      --text: #f7fafc;
+      --muted: #b8c3cf;
+      --good: #58d68d;
+      --warn: #ffcf5a;
+      --bad: #ff6b6b;
+      --accent: #4fb4ff;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      height: 100%;
+    }
+
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: #06080c;
+      color: var(--text);
+      font-family: Arial, Helvetica, sans-serif;
+    }
+
+    canvas {
+      display: block;
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    #hud {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      z-index: 10;
+      display: grid;
+      gap: 8px;
+      width: min(320px, calc(100vw - 24px));
+      pointer-events: none;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .stat,
+    #roomPanel,
+    #feed,
+    #playersPanel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+      backdrop-filter: blur(10px);
+    }
+
+    .stat {
+      padding: 8px;
+      min-width: 0;
+    }
+
+    .label {
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+
+    .value {
+      margin-top: 3px;
+      font-size: 20px;
+      font-weight: 700;
+      line-height: 1;
+      white-space: nowrap;
+    }
+
+    #roomPanel {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      padding: 8px;
+      pointer-events: auto;
+    }
+
+    #roomLink {
+      min-width: 0;
+      overflow: hidden;
+      color: var(--muted);
+      font-size: 12px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    #copyRoom,
+    #playButton {
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 7px;
+      background: #e8f3ff;
+      color: #08111c;
+      cursor: pointer;
+      font-weight: 700;
+      min-height: 34px;
+      padding: 0 12px;
+    }
+
+    #feed {
+      display: grid;
+      gap: 4px;
+      max-height: 120px;
+      overflow: hidden;
+      padding: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    #feed:empty {
+      display: none;
+    }
+
+    #playersPanel {
+      position: fixed;
+      top: 12px;
+      right: 12px;
+      z-index: 10;
+      width: min(260px, calc(100vw - 24px));
+      max-height: 42vh;
+      overflow: hidden;
+      padding: 10px;
+    }
+
+    #playersPanel h2 {
+      margin: 0 0 8px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    #players {
+      display: grid;
+      gap: 6px;
+      max-height: calc(42vh - 38px);
+      overflow: auto;
+    }
+
+    .playerRow {
+      display: grid;
+      grid-template-columns: 10px minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      min-height: 24px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .swatch {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .playerName {
+      overflow: hidden;
+      color: var(--text);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .playerScore {
+      font-variant-numeric: tabular-nums;
+    }
+
+    #crosshair {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      z-index: 8;
+      width: 18px;
+      height: 18px;
+      margin: -9px 0 0 -9px;
+      pointer-events: none;
+    }
+
+    #crosshair::before,
+    #crosshair::after {
+      content: "";
+      position: absolute;
+      background: rgba(255, 255, 255, 0.9);
+      box-shadow: 0 0 8px rgba(0, 0, 0, 0.65);
+    }
+
+    #crosshair::before {
+      left: 8px;
+      top: 0;
+      width: 2px;
+      height: 18px;
+    }
+
+    #crosshair::after {
+      left: 0;
+      top: 8px;
+      width: 18px;
+      height: 2px;
+    }
+
+    #overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      display: grid;
+      place-items: center;
+      padding: 20px;
+      background: linear-gradient(180deg, rgba(3, 5, 9, 0.52), rgba(3, 5, 9, 0.14));
+      pointer-events: auto;
+    }
+
+    #overlay.hidden {
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 120ms ease;
+    }
+
+    #overlayPanel {
+      display: grid;
+      gap: 12px;
+      width: min(380px, 100%);
+      padding: 16px;
+      background: var(--panel-strong);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 22px 70px rgba(0, 0, 0, 0.42);
+    }
+
+    #overlayTitle {
+      margin: 0;
+      font-size: 24px;
+      line-height: 1.05;
+    }
+
+    #overlayStatus {
+      min-height: 18px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    #nameInput {
+      width: 100%;
+      height: 38px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text);
+      outline: none;
+      padding: 0 10px;
+    }
+
+    #nameInput:focus {
+      border-color: rgba(79, 180, 255, 0.75);
+    }
+
+    #damageVignette {
+      position: fixed;
+      inset: 0;
+      z-index: 7;
+      background: radial-gradient(circle, rgba(255, 0, 0, 0) 52%, rgba(255, 0, 0, 0.36) 100%);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 220ms ease;
+    }
+
+    #damageVignette.hit {
+      opacity: 1;
+      transition: none;
+    }
+
+    @media (max-width: 720px) {
+      #playersPanel {
+        top: auto;
+        right: 12px;
+        bottom: 12px;
+        max-height: 28vh;
+      }
+
+      .value {
+        font-size: 18px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="hud">
+    <div class="stats">
+      <div class="stat">
+        <div class="label">HP</div>
+        <div class="value" id="hp">100</div>
+      </div>
+      <div class="stat">
+        <div class="label">Kills</div>
+        <div class="value" id="kills">0</div>
+      </div>
+      <div class="stat">
+        <div class="label">Deaths</div>
+        <div class="value" id="deaths">0</div>
+      </div>
+    </div>
+    <div id="roomPanel">
+      <div id="roomLink"></div>
+      <button id="copyRoom" type="button">Copy</button>
+    </div>
+    <div id="feed"></div>
+  </div>
+
+  <div id="playersPanel">
+    <h2>Players</h2>
+    <div id="players"></div>
+  </div>
+
+  <div id="crosshair"></div>
+  <div id="damageVignette"></div>
+
+  <div id="overlay">
+    <div id="overlayPanel">
+      <h1 id="overlayTitle">Arena</h1>
+      <input id="nameInput" maxlength="18" autocomplete="off" spellcheck="false" aria-label="Player name">
+      <button id="playButton" type="button">Play</button>
+      <div id="overlayStatus">Connecting...</div>
+    </div>
+  </div>
+
+  <script src="/vendor/three.min.js"></script>
+  <script>
+    const roomId = getRoomId();
+    const roomUrl = `${location.origin}/r/${roomId}`;
+    const savedName = localStorage.getItem("arenaName") || `Player ${Math.floor(100 + Math.random() * 900)}`;
+
+    const hpEl = document.getElementById("hp");
+    const killsEl = document.getElementById("kills");
+    const deathsEl = document.getElementById("deaths");
+    const roomLinkEl = document.getElementById("roomLink");
+    const copyRoomEl = document.getElementById("copyRoom");
+    const playersEl = document.getElementById("players");
+    const feedEl = document.getElementById("feed");
+    const overlayEl = document.getElementById("overlay");
+    const overlayTitleEl = document.getElementById("overlayTitle");
+    const overlayStatusEl = document.getElementById("overlayStatus");
+    const nameInputEl = document.getElementById("nameInput");
+    const playButtonEl = document.getElementById("playButton");
+    const damageVignetteEl = document.getElementById("damageVignette");
+
+    roomLinkEl.textContent = roomUrl;
+    nameInputEl.value = savedName;
+
+    let socket;
+    let myId = null;
+    let connected = false;
+    let dead = false;
+    let lastHp = 100;
+    let pendingRespawnAt = 0;
+    let lastStateSentAt = 0;
+    let lastShotAt = 0;
+    let audioCtx = null;
+
+    const remotePlayers = new Map();
+    const playerStates = new Map();
+    const tracers = [];
+    const feed = [];
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x85c5df);
+    scene.fog = new THREE.Fog(0x85c5df, 65, 245);
+
+    const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 1000);
+    const pitch = new THREE.Object3D();
+    pitch.add(camera);
+
+    const yaw = new THREE.Object3D();
+    yaw.position.set(0, 2, 0);
+    yaw.add(pitch);
+    scene.add(yaw);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.shadowMap.enabled = true;
+    document.body.appendChild(renderer.domElement);
+
+    const sun = new THREE.DirectionalLight(0xffffff, 1.35);
+    sun.position.set(80, 160, 40);
+    sun.castShadow = true;
+    scene.add(sun);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.48));
+
+    buildArena();
+
+    const gun = new THREE.Group();
+    camera.add(gun);
+
+    const gunMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.26, 0.16, 0.9),
+      new THREE.MeshStandardMaterial({ color: 0x101014, metalness: 0.25, roughness: 0.55 })
+    );
+    gunMesh.position.set(0.3, -0.24, -0.74);
+    gun.add(gunMesh);
+
+    const muzzle = new THREE.PointLight(0xffb347, 0, 12);
+    muzzle.position.set(0.3, -0.23, -1.2);
+    gun.add(muzzle);
+
+    let recoil = 0;
+    const move = { f: 0, b: 0, l: 0, r: 0, sprint: 0 };
+    const clock = new THREE.Clock();
+
+    connect();
+    animate();
+
+    playButtonEl.addEventListener("click", startPlaying);
+    renderer.domElement.addEventListener("click", () => {
+      if (!document.pointerLockElement && overlayEl.classList.contains("hidden")) {
+        renderer.domElement.requestPointerLock();
+      }
+    });
+
+    copyRoomEl.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(roomUrl);
+        copyRoomEl.textContent = "Copied";
+        setTimeout(() => copyRoomEl.textContent = "Copy", 900);
+      } catch {
+        copyRoomEl.textContent = "Select URL";
+        setTimeout(() => copyRoomEl.textContent = "Copy", 1200);
+      }
+    });
+
+    nameInputEl.addEventListener("change", () => {
+      const name = cleanName(nameInputEl.value);
+      nameInputEl.value = name;
+      localStorage.setItem("arenaName", name);
+      send({ type: "rename", name });
+    });
+
+    document.addEventListener("mousemove", (event) => {
+      if (!document.pointerLockElement || dead) return;
+
+      yaw.rotation.y -= event.movementX * 0.002;
+      pitch.rotation.x -= event.movementY * 0.002;
+      pitch.rotation.x = Math.max(-1.2, Math.min(1.2, pitch.rotation.x));
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.code === "KeyW") move.f = 1;
+      if (event.code === "KeyS") move.b = 1;
+      if (event.code === "KeyA") move.l = 1;
+      if (event.code === "KeyD") move.r = 1;
+      if (event.code === "ShiftLeft") move.sprint = 1;
+      if (event.code === "Escape") showOverlay();
+    });
+
+    document.addEventListener("keyup", (event) => {
+      if (event.code === "KeyW") move.f = 0;
+      if (event.code === "KeyS") move.b = 0;
+      if (event.code === "KeyA") move.l = 0;
+      if (event.code === "KeyD") move.r = 0;
+      if (event.code === "ShiftLeft") move.sprint = 0;
+    });
+
+    window.addEventListener("mousedown", () => {
+      if (!document.pointerLockElement || dead || !connected) return;
+      fire();
+    });
+
+    document.addEventListener("pointerlockchange", () => {
+      if (!document.pointerLockElement) showOverlay();
+    });
+
+    addEventListener("resize", () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    function connect() {
+      const protocol = location.protocol === "https:" ? "wss" : "ws";
+      const name = cleanName(nameInputEl.value);
+      const url = `${protocol}://${location.host}/ws?room=${encodeURIComponent(roomId)}&name=${encodeURIComponent(name)}`;
+
+      socket = new WebSocket(url);
+
+      socket.addEventListener("open", () => {
+        connected = true;
+        overlayStatusEl.textContent = "Ready";
+      });
+
+      socket.addEventListener("close", () => {
+        connected = false;
+        overlayStatusEl.textContent = "Disconnected. Reconnecting...";
+        showOverlay();
+        setTimeout(connect, 900);
+      });
+
+      socket.addEventListener("message", (event) => {
+        const msg = JSON.parse(event.data);
+
+        if (msg.type === "welcome") {
+          myId = msg.id;
+          yaw.position.set(msg.player.position.x, msg.player.position.y, msg.player.position.z);
+          overlayStatusEl.textContent = "Ready";
+          return;
+        }
+
+        if (msg.type === "snapshot") {
+          applySnapshot(msg.players);
+          return;
+        }
+
+        if (msg.type === "event") {
+          applyEvent(msg);
+        }
+      });
+    }
+
+    function applySnapshot(players) {
+      const seen = new Set();
+
+      players.forEach((player) => {
+        playerStates.set(player.id, player);
+        seen.add(player.id);
+
+        if (player.id === myId) {
+          updateSelf(player);
+          return;
+        }
+
+        updateRemotePlayer(player);
+      });
+
+      for (const [id, remote] of remotePlayers) {
+        if (!seen.has(id)) {
+          scene.remove(remote.group);
+          remotePlayers.delete(id);
+          playerStates.delete(id);
+        }
+      }
+
+      renderPlayers(players);
+    }
+
+    function updateSelf(player) {
+      hpEl.textContent = player.hp;
+      killsEl.textContent = player.kills;
+      deathsEl.textContent = player.deaths;
+
+      if (player.hp < lastHp) flashDamage();
+      lastHp = player.hp;
+
+      if (!player.alive) {
+        dead = true;
+        pendingRespawnAt = player.respawnAt;
+        showOverlay();
+        return;
+      }
+
+      if (dead) {
+        yaw.position.set(player.position.x, player.position.y, player.position.z);
+        pitch.rotation.x = 0;
+        dead = false;
+        lastHp = player.hp;
+      }
+    }
+
+    function updateRemotePlayer(player) {
+      let remote = remotePlayers.get(player.id);
+      if (!remote) {
+        remote = createRemotePlayer(player);
+        remotePlayers.set(player.id, remote);
+        scene.add(remote.group);
+      }
+
+      remote.group.visible = player.alive;
+      remote.target.set(player.position.x, player.position.y, player.position.z);
+      remote.group.rotation.y = player.yaw || 0;
+      remote.nameSprite.material.map.dispose();
+      remote.nameSprite.material.map = makeNameTexture(player.name, player.color);
+      remote.nameSprite.material.needsUpdate = true;
+    }
+
+    function applyEvent(msg) {
+      if (msg.event === "shot") {
+        drawTracer(msg.origin, msg.direction, msg.hitId ? 45 : 80, msg.shooterId === myId);
+
+        if (msg.killed) {
+          const shooter = playerStates.get(msg.shooterId);
+          const target = playerStates.get(msg.hitId);
+          if (shooter && target) {
+            pushFeed(`${shooter.name} eliminated ${target.name}`);
+          }
+        }
+        return;
+      }
+
+      if (msg.event === "joined" && msg.player.id !== myId) {
+        pushFeed(`${msg.player.name} joined`);
+        return;
+      }
+
+      if (msg.event === "left") {
+        const player = playerStates.get(msg.id);
+        if (player) pushFeed(`${player.name} left`);
+        return;
+      }
+
+      if (msg.event === "respawn" && msg.player.id !== myId) {
+        pushFeed(`${msg.player.name} respawned`);
+      }
+    }
+
+    function startPlaying() {
+      const name = cleanName(nameInputEl.value);
+      nameInputEl.value = name;
+      localStorage.setItem("arenaName", name);
+      send({ type: "rename", name });
+
+      if (!connected) return;
+
+      overlayEl.classList.add("hidden");
+      renderer.domElement.requestPointerLock();
+      ensureAudio();
+    }
+
+    function showOverlay() {
+      overlayEl.classList.remove("hidden");
+
+      if (dead) {
+        const seconds = Math.max(0, Math.ceil((pendingRespawnAt - Date.now()) / 1000));
+        overlayTitleEl.textContent = seconds > 0 ? `Respawn in ${seconds}` : "Respawning";
+        playButtonEl.disabled = true;
+        requestAnimationFrame(showOverlay);
+        return;
+      }
+
+      overlayTitleEl.textContent = "Arena";
+      playButtonEl.disabled = !connected;
+    }
+
+    function fire() {
+      const now = performance.now();
+      if (now - lastShotAt < 145) return;
+      lastShotAt = now;
+
+      ensureAudio();
+      pew();
+      recoil = 0.22;
+      muzzle.intensity = 2.2;
+      setTimeout(() => muzzle.intensity = 0, 45);
+
+      const direction = new THREE.Vector3();
+      camera.getWorldDirection(direction);
+
+      sendState();
+      send({
+        type: "fire",
+        direction: { x: direction.x, y: direction.y, z: direction.z }
+      });
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      const dt = Math.min(clock.getDelta(), 0.05);
+      moveLocalPlayer(dt);
+      updateNetwork(dt);
+      animateRemotePlayers(dt);
+      animateTracers(dt);
+
+      gun.position.z = -recoil;
+      recoil *= 0.84;
+
+      renderer.render(scene, camera);
+    }
+
+    function moveLocalPlayer(dt) {
+      if (dead || !document.pointerLockElement) return;
+
+      const speed = (move.sprint ? 15 : 9) * dt;
+      const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(yaw.quaternion);
+      const right = new THREE.Vector3(1, 0, 0).applyQuaternion(yaw.quaternion);
+      forward.y = 0;
+      right.y = 0;
+      forward.normalize();
+      right.normalize();
+
+      if (move.f) yaw.position.add(forward.clone().multiplyScalar(speed));
+      if (move.b) yaw.position.add(forward.clone().multiplyScalar(-speed));
+      if (move.l) yaw.position.add(right.clone().multiplyScalar(-speed));
+      if (move.r) yaw.position.add(right.clone().multiplyScalar(speed));
+
+      yaw.position.x = clamp(yaw.position.x, -280, 280);
+      yaw.position.y = 2;
+      yaw.position.z = clamp(yaw.position.z, -280, 280);
+    }
+
+    function updateNetwork() {
+      if (!connected || !myId || dead) return;
+
+      const now = performance.now();
+      if (now - lastStateSentAt < 50) return;
+
+      lastStateSentAt = now;
+      sendState();
+    }
+
+    function sendState() {
+      send({
+        type: "state",
+        position: {
+          x: yaw.position.x,
+          y: yaw.position.y,
+          z: yaw.position.z
+        },
+        yaw: yaw.rotation.y,
+        pitch: pitch.rotation.x
+      });
+    }
+
+    function animateRemotePlayers(dt) {
+      for (const remote of remotePlayers.values()) {
+        remote.group.position.lerp(remote.target, Math.min(1, dt * 12));
+        remote.bob += dt * 8;
+        remote.body.position.y = -0.78 + Math.sin(remote.bob) * 0.035;
+        remote.gun.position.y = -0.2 + Math.sin(remote.bob + 1) * 0.018;
+      }
+    }
+
+    function drawTracer(origin, direction, length, localShot) {
+      const start = new THREE.Vector3(origin.x, origin.y - 0.08, origin.z);
+      const end = start.clone().add(new THREE.Vector3(direction.x, direction.y, direction.z).multiplyScalar(length));
+      const geometry = new THREE.BufferGeometry().setFromPoints([start, end]);
+      const material = new THREE.LineBasicMaterial({
+        color: localShot ? 0xffe27a : 0xff7a5a,
+        transparent: true,
+        opacity: 0.86
+      });
+      const line = new THREE.Line(geometry, material);
+      scene.add(line);
+      tracers.push({ line, material, age: 0, ttl: 0.16 });
+    }
+
+    function animateTracers(dt) {
+      for (let i = tracers.length - 1; i >= 0; i -= 1) {
+        const tracer = tracers[i];
+        tracer.age += dt;
+        tracer.material.opacity = Math.max(0, 0.86 * (1 - tracer.age / tracer.ttl));
+
+        if (tracer.age >= tracer.ttl) {
+          scene.remove(tracer.line);
+          tracer.line.geometry.dispose();
+          tracer.material.dispose();
+          tracers.splice(i, 1);
+        }
+      }
+    }
+
+    function createRemotePlayer(player) {
+      const group = new THREE.Group();
+      group.position.set(player.position.x, player.position.y, player.position.z);
+
+      const material = new THREE.MeshStandardMaterial({
+        color: new THREE.Color(player.color),
+        roughness: 0.6
+      });
+
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.48, 1.35, 14), material);
+      body.position.y = -0.78;
+      body.castShadow = true;
+      group.add(body);
+
+      const head = new THREE.Mesh(
+        new THREE.SphereGeometry(0.34, 16, 16),
+        new THREE.MeshStandardMaterial({ color: 0xffdfc7, roughness: 0.72 })
+      );
+      head.position.y = 0.12;
+      group.add(head);
+
+      const gun = new THREE.Mesh(
+        new THREE.BoxGeometry(0.16, 0.12, 0.72),
+        new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.25, roughness: 0.6 })
+      );
+      gun.position.set(0.34, -0.2, -0.55);
+      group.add(gun);
+
+      const nameSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: makeNameTexture(player.name, player.color),
+        transparent: true,
+        depthTest: false
+      }));
+      nameSprite.position.y = 0.84;
+      nameSprite.scale.set(2.8, 0.7, 1);
+      group.add(nameSprite);
+
+      return {
+        group,
+        body,
+        gun,
+        nameSprite,
+        target: group.position.clone(),
+        bob: Math.random() * Math.PI * 2
+      };
+    }
+
+    function makeNameTexture(name, color) {
+      const canvas = document.createElement("canvas");
+      canvas.width = 256;
+      canvas.height = 64;
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "rgba(0, 0, 0, 0.58)";
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 4;
+      roundRect(ctx, 8, 8, 240, 48, 10);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "700 24px Arial";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(name, 128, 33, 218);
+
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.minFilter = THREE.LinearFilter;
+      return texture;
+    }
+
+    function buildArena() {
+      const rng = mulberry32(hashString(roomId));
+      const groundGeo = new THREE.PlaneGeometry(600, 600, 96, 96);
+      groundGeo.rotateX(-Math.PI / 2);
+
+      for (let i = 0; i < groundGeo.attributes.position.count; i += 1) {
+        const x = groundGeo.attributes.position.getX(i);
+        const z = groundGeo.attributes.position.getZ(i);
+        const y = Math.sin(x * 0.035) * 0.25 + Math.cos(z * 0.026) * 0.28 + rng() * 0.18;
+        groundGeo.attributes.position.setY(i, y);
+      }
+
+      groundGeo.computeVertexNormals();
+
+      const ground = new THREE.Mesh(
+        groundGeo,
+        new THREE.MeshStandardMaterial({ color: 0x3d9250, roughness: 0.95 })
+      );
+      ground.receiveShadow = true;
+      scene.add(ground);
+
+      const ringGeo = new THREE.TorusGeometry(95, 0.14, 8, 96);
+      const ringMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.28 });
+      const ring = new THREE.Mesh(ringGeo, ringMat);
+      ring.rotation.x = Math.PI / 2;
+      ring.position.y = 0.12;
+      scene.add(ring);
+
+      for (let i = 0; i < 90; i += 1) {
+        const angle = rng() * Math.PI * 2;
+        const radius = 30 + rng() * 230;
+        const x = Math.cos(angle) * radius;
+        const z = Math.sin(angle) * radius;
+        if (Math.abs(x) < 12 && Math.abs(z) < 12) continue;
+
+        const trunk = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.35 + rng() * 0.25, 0.58 + rng() * 0.35, 2.8 + rng() * 1.6, 9),
+          new THREE.MeshStandardMaterial({ color: 0x805438, roughness: 0.9 })
+        );
+        trunk.position.set(x, 1.2, z);
+        trunk.castShadow = true;
+        scene.add(trunk);
+
+        const top = new THREE.Mesh(
+          new THREE.SphereGeometry(1.25 + rng() * 0.85, 12, 12),
+          new THREE.MeshStandardMaterial({ color: rng() > 0.5 ? 0x2e9d5b : 0x277c68, roughness: 0.85 })
+        );
+        top.position.set(x, 3.1 + rng() * 0.5, z);
+        top.castShadow = true;
+        scene.add(top);
+      }
+
+      for (let i = 0; i < 16; i += 1) {
+        const angle = (i / 16) * Math.PI * 2;
+        const radius = 42 + (i % 4) * 16;
+        const crate = new THREE.Mesh(
+          new THREE.BoxGeometry(3.5, 2.2, 3.5),
+          new THREE.MeshStandardMaterial({ color: i % 2 ? 0x697783 : 0x8a6f4f, roughness: 0.82 })
+        );
+        crate.position.set(Math.cos(angle) * radius, 1.1, Math.sin(angle) * radius);
+        crate.rotation.y = angle;
+        crate.castShadow = true;
+        crate.receiveShadow = true;
+        scene.add(crate);
+      }
+    }
+
+    function renderPlayers(players) {
+      const sorted = [...players].sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
+      playersEl.innerHTML = "";
+
+      sorted.forEach((player) => {
+        const row = document.createElement("div");
+        row.className = "playerRow";
+        row.style.color = player.color;
+        row.innerHTML = `
+          <span class="swatch"></span>
+          <span class="playerName">${escapeHtml(player.name)}${player.id === myId ? " (you)" : ""}</span>
+          <span class="playerScore">${player.kills}/${player.deaths}</span>
+        `;
+        playersEl.appendChild(row);
+      });
+    }
+
+    function pushFeed(text) {
+      feed.unshift(text);
+      feed.splice(5);
+      feedEl.innerHTML = "";
+      feed.forEach((item) => {
+        const div = document.createElement("div");
+        div.textContent = item;
+        feedEl.appendChild(div);
+      });
+    }
+
+    function flashDamage() {
+      damageVignetteEl.classList.add("hit");
+      setTimeout(() => damageVignetteEl.classList.remove("hit"), 80);
+    }
+
+    function ensureAudio() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+
+      if (audioCtx.state === "suspended") {
+        audioCtx.resume();
+      }
+    }
+
+    function pew() {
+      if (!audioCtx) return;
+
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.frequency.value = 130;
+      gain.gain.value = 0.045;
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.045);
+    }
+
+    function send(payload) {
+      if (!socket || socket.readyState !== WebSocket.OPEN) return;
+      socket.send(JSON.stringify(payload));
+    }
+
+    function getRoomId() {
+      const match = location.pathname.match(/^\/r\/([a-z0-9-]+)/i);
+      if (match) return match[1].toLowerCase();
+
+      const fromQuery = new URLSearchParams(location.search).get("room");
+      const clean = String(fromQuery || "").toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 32);
+      const id = clean || Math.random().toString(36).slice(2, 8);
+      history.replaceState(null, "", `/r/${id}`);
+      return id;
+    }
+
+    function cleanName(value) {
+      const name = String(value || "").replace(/[^\w -]/g, "").trim().slice(0, 18);
+      return name || `Player ${Math.floor(100 + Math.random() * 900)}`;
+    }
+
+    function roundRect(ctx, x, y, width, height, radius) {
+      ctx.beginPath();
+      ctx.moveTo(x + radius, y);
+      ctx.arcTo(x + width, y, x + width, y + height, radius);
+      ctx.arcTo(x + width, y + height, x, y + height, radius);
+      ctx.arcTo(x, y + height, x, y, radius);
+      ctx.arcTo(x, y, x + width, y, radius);
+      ctx.closePath();
+    }
+
+    function hashString(value) {
+      let hash = 2166136261;
+      for (let i = 0; i < value.length; i += 1) {
+        hash ^= value.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+      }
+      return hash >>> 0;
+    }
+
+    function mulberry32(seed) {
+      return function random() {
+        let t = seed += 0x6D2B79F5;
+        t = Math.imul(t ^ t >>> 15, t | 1);
+        t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+        return ((t ^ t >>> 14) >>> 0) / 4294967296;
+      };
+    }
+
+    function clamp(value, min, max) {
+      return Math.max(min, Math.min(max, value));
+    }
+
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        "\"": "&quot;",
+        "'": "&#039;"
+      })[char]);
+    }
+  </script>
+</body>
+</html>
