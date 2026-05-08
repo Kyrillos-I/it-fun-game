@@ -12,7 +12,6 @@ const TICK_MS = 50;
 const MAP_LIMIT = 280;
 const PLAYER_RADIUS = 0.62;
 const MAX_HIT_DISTANCE = 190;
-const RESPAWN_MS = 3000;
 const STALE_ROOM_MS = 5 * 60 * 1000;
 const PICKUP_RADIUS = 4.2;
 const PICKUP_RADIUS_XZ = 5.6;
@@ -137,6 +136,9 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
 
+// All game state is intentionally in memory. A room owns the authoritative copy
+// of players, pickups, bots, boss state, match timers, and castle collision.
+// Restarting the Node process clears rooms, which keeps hosting simple.
 const rooms = new Map();
 
 app.get("/healthz", (_req, res) => {
@@ -262,6 +264,8 @@ wss.on("connection", (ws, req) => {
     }
 
     if (msg.type === "play") {
+      // Join and respawn both use the same client command. The server is the
+      // authority that chooses a safe spawn and resets per-life state.
       spawnPlayer(room, player, true);
       broadcast(room, {
         type: "event",
@@ -314,22 +318,13 @@ setInterval(() => {
   const now = Date.now();
 
   for (const room of rooms.values()) {
+    // This is the room tick. Clients only send intent/state updates; this loop
+    // advances server-owned systems and broadcasts a fresh snapshot.
     updateMatch(room, now);
     updateCoopRoom(room, now);
     replenishPickups(room);
     updateAi(room, now);
     processProximityPickups(room);
-
-    for (const player of room.players.values()) {
-      if (!player.alive && player.respawnAt <= now) {
-        spawnPlayer(room, player, false);
-        broadcast(room, {
-          type: "event",
-          event: "respawn",
-          player: publicPlayer(player)
-        });
-      }
-    }
 
     broadcast(room, {
       type: "snapshot",
@@ -751,6 +746,8 @@ function handleFire(room, shooter, msg) {
   };
 
   const projectiles = [];
+  // One trigger pull can create several damage sources: shotgun pellets,
+  // bazooka splash, and direct hits. Merge them by target before applying HP.
   const damageByTarget = new Map();
 
   for (let i = 0; i < weapon.pellets; i += 1) {
@@ -1104,6 +1101,7 @@ function applyPlayerState(room, player, msg) {
   const now = Date.now();
   const frozen = player.frozenUntil > now;
 
+  // Rotation stays live while frozen so a frozen player can still look around.
   if (Number.isFinite(msg.yaw)) {
     player.yaw = clamp(msg.yaw, -Math.PI * 4, Math.PI * 4);
   }
@@ -1114,6 +1112,8 @@ function applyPlayerState(room, player, msg) {
 
   if (frozen) return;
 
+  // Movement is client-predicted for feel, then bounded here by map limits,
+  // walkable castle platform height, and authoritative obstacle collision.
   const next = msg.position || {};
   if (
     Number.isFinite(next.x) &&
@@ -1152,6 +1152,8 @@ function respawn(player) {
 }
 
 function spawnPlayer(room, player, firstSpawn) {
+  // Per-life reset. Scores and selected powerup stay, but temporary combat
+  // state and weapons reset so every life starts from the same pistol baseline.
   player.isGoat = false;
   player.goatTier = 0;
   player.frozenUntil = 0;
@@ -1267,6 +1269,8 @@ function spreadDirection(direction, spread) {
 }
 
 function publicPlayer(player) {
+  // Snapshots use public serializers so server-only fields such as ws handles
+  // never leave the backend.
   return {
     id: player.id,
     name: player.name,
@@ -1482,6 +1486,8 @@ function updateAi(room, now) {
     }
   }
 
+  // Simple authoritative AI: the server moves enemies, resolves collisions, and
+  // applies melee damage so every browser sees the same fight.
   for (const bot of aiTargets(room)) {
     if (!bot.alive) continue;
     const target = nearestAlivePlayer(room, bot.position);
@@ -1508,7 +1514,7 @@ function updateAi(room, now) {
       if (target.hp <= 0) {
         target.alive = false;
         target.deaths += 1;
-        target.respawnAt = now + RESPAWN_MS;
+        target.respawnAt = 0;
         if (room.gameMode === "coop") {
           coopPlayerDown(room);
         }
@@ -1643,7 +1649,8 @@ function killTarget(room, target, killer = null) {
 
   target.deaths += 1;
   target.streak = 0;
-  target.respawnAt = Date.now() + RESPAWN_MS;
+  // No auto-respawn: the browser must send another "play" command.
+  target.respawnAt = 0;
 }
 
 function nearestAlivePlayer(room, position) {
@@ -1738,15 +1745,9 @@ function buildObstacleLayout(roomId) {
   const obstacles = [];
 
   const platforms = [
-    { x: 0, z: 0, w: 46, d: 46, height: 12 },
-    { x: 0, z: -125, w: 72, d: 18, height: 7.2 },
-    { x: 0, z: 125, w: 72, d: 18, height: 7.2 },
-    { x: -125, z: 0, w: 18, d: 72, height: 7.2 },
-    { x: 125, z: 0, w: 18, d: 72, height: 7.2 },
-    { x: -62, z: -62, w: 38, d: 24, height: 5.4 },
-    { x: 62, z: 62, w: 38, d: 24, height: 5.4 },
-    { x: -62, z: 62, w: 24, d: 38, height: 5.4 },
-    { x: 62, z: -62, w: 24, d: 38, height: 5.4 }
+    { x: -86, z: -106, w: 58, d: 42, height: 7.4 },
+    { x: 86, z: 106, w: 58, d: 42, height: 7.4 },
+    { x: 0, z: 0, w: 32, d: 32, height: 4.8 }
   ];
 
   for (const platform of platforms) {
@@ -1763,14 +1764,10 @@ function buildObstacleLayout(roomId) {
   }
 
   const jumpPads = [
-    { x: 23, z: 0, boost: 28 },
-    { x: -23, z: 0, boost: 28 },
-    { x: 0, z: -116, boost: 24 },
-    { x: 0, z: 116, boost: 24 },
-    { x: -116, z: 0, boost: 24 },
-    { x: 116, z: 0, boost: 24 },
-    { x: -62, z: -48, boost: 22 },
-    { x: 62, z: 48, boost: 22 }
+    { x: -70, z: -82, boost: 24 },
+    { x: 70, z: 82, boost: 24 },
+    { x: -12, z: -8, boost: 20 },
+    { x: 12, z: 8, boost: 20 }
   ];
 
   for (const jp of jumpPads) {
@@ -1786,14 +1783,16 @@ function buildObstacleLayout(roomId) {
   }
 
   const wallSegments = [
-    { x: 0, z: -125, w: 150, d: 10 },
-    { x: 0, z: 125, w: 150, d: 10 },
-    { x: -125, z: 0, w: 10, d: 150 },
-    { x: 125, z: 0, w: 10, d: 150 },
-    { x: -62, z: -62, w: 44, d: 9 },
-    { x: 62, z: 62, w: 44, d: 9 },
-    { x: -62, z: 62, w: 9, d: 44 },
-    { x: 62, z: -62, w: 9, d: 44 }
+    { x: 0, z: -198, w: 340, d: 10 },
+    { x: 0, z: 198, w: 340, d: 10 },
+    { x: -198, z: 0, w: 10, d: 340 },
+    { x: 198, z: 0, w: 10, d: 340 },
+    { x: -122, z: -124, w: 6, d: 78 },
+    { x: -50, z: -132, w: 70, d: 6 },
+    { x: 122, z: 124, w: 6, d: 78 },
+    { x: 50, z: 132, w: 70, d: 6 },
+    { x: -108, z: 0, w: 6, d: 52 },
+    { x: 108, z: 0, w: 6, d: 52 }
   ];
 
   for (const segment of wallSegments) {
@@ -1816,9 +1815,7 @@ function buildObstacleLayout(roomId) {
   }
 
   const towers = [
-    [-125, -125], [125, -125], [-125, 125], [125, 125],
-    [-62, -62], [62, 62], [-62, 62], [62, -62],
-    [0, 0]
+    [-165, -165], [165, -165], [-165, 165], [165, 165]
   ];
   for (const [x, z] of towers) {
     obstacles.push({
@@ -1826,20 +1823,24 @@ function buildObstacleLayout(roomId) {
       x,
       z,
       y: terrainHeightAt(x, z),
-      radius: x === 0 && z === 0 ? 12 : 8,
-      height: x === 0 && z === 0 ? 18 : 12
+      radius: 6.8,
+      height: 10
     });
   }
 
-  for (let i = 0; i < 90; i += 1) {
-    const angle = rng() * Math.PI * 2;
-    const radius = 30 + rng() * 230;
-    const x = Math.cos(angle) * radius;
-    const z = Math.sin(angle) * radius;
-    if (Math.abs(x) < 12 && Math.abs(z) < 12) continue;
-
-    const trunkTop = 2.8 + rng() * 1.6;
-    const canopy = 1.25 + rng() * 0.85;
+  const lawns = [
+    { x: -120, z: -92 },
+    { x: -150, z: -56 },
+    { x: 120, z: 92 },
+    { x: 150, z: 56 },
+    { x: -26, z: -150 },
+    { x: 26, z: 150 }
+  ];
+  for (const spot of lawns) {
+    const x = spot.x + (rng() - 0.5) * 14;
+    const z = spot.z + (rng() - 0.5) * 14;
+    const trunkTop = 3 + rng() * 1.2;
+    const canopy = 1.3 + rng() * 0.65;
     obstacles.push({
       type: "tree",
       x,
@@ -1852,11 +1853,11 @@ function buildObstacleLayout(roomId) {
     });
   }
 
-  for (let i = 0; i < 16; i += 1) {
-    const angle = (i / 16) * Math.PI * 2;
-    const radius = 42 + (i % 4) * 16;
-    const x = Math.cos(angle) * radius;
-    const z = Math.sin(angle) * radius;
+  const centerCrates = [
+    [-22, -8], [-12, -6], [12, 6], [22, 8],
+    [-38, 16], [38, -16], [-56, 0], [56, 0]
+  ];
+  for (const [x, z] of centerCrates) {
     obstacles.push({
       type: "crate",
       x,
@@ -1864,19 +1865,23 @@ function buildObstacleLayout(roomId) {
       y: terrainHeightAt(x, z),
       radius: 2.45,
       height: 2.4,
-      angle
+      angle: Math.atan2(z, x)
     });
   }
 
-  for (let i = 0; i < 18; i += 1) {
-    const angle = rng() * Math.PI * 2;
-    const radius = 26 + rng() * 140;
-    const x = Math.cos(angle) * radius;
-    const z = Math.sin(angle) * radius;
-    const size = 1.5 + rng() * 2.8;
-    const scaleY = 0.55 + rng() * 0.9;
+  const vehicles = [
+    { x: -28, z: 0, type: "bus", size: 4.8, scaleY: 0.62 },
+    { x: 28, z: 0, type: "truck", size: 4.2, scaleY: 0.7 },
+    { x: -82, z: 32, type: "car", size: 2.8, scaleY: 0.75 },
+    { x: 82, z: -32, type: "car", size: 2.8, scaleY: 0.75 }
+  ];
+  for (const vehicle of vehicles) {
+    const size = vehicle.size;
+    const scaleY = vehicle.scaleY;
+    const x = vehicle.x;
+    const z = vehicle.z;
     obstacles.push({
-      type: "rock",
+      type: vehicle.type,
       x,
       z,
       y: terrainHeightAt(x, z),
@@ -1884,9 +1889,9 @@ function buildObstacleLayout(roomId) {
       height: Math.max(1.2, size * scaleY),
       size,
       scaleY,
-      rx: rng() * 2,
-      ry: rng() * 2,
-      rz: rng() * 2
+      rx: 0,
+      ry: rng() * 0.5,
+      rz: 0
     });
   }
 

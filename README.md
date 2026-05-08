@@ -28,9 +28,13 @@ Players start with an infinite-ammo pistol. Sniper, shotgun, machine gun, and ba
 
 On join and respawn, choose one powerup: double speed, +0.5 damage, or +0.5 health. Killing another player heals you back to max health.
 
+After dying, you only respawn by pressing Play Again. The server does not auto-respawn players.
+
 Bots spawn periodically and chase players. A boss spawns every two minutes; killing it drops a nuke pickup.
 
 Rounds last 5 minutes or end when someone reaches 25 kills. The HUD includes a minimap, boss health bar, hit marker, kill banners, and active boost timers. Floor boosts include heal, armor, speed, damage, and jump.
+
+See `architecture.md` for how the server, websocket messages, room loop, collision, and client rendering fit together.
 
 ## Let Friends Join From Your Device
 

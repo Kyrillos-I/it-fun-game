@@ -909,6 +909,8 @@
     let pendingGameMode = localStorage.getItem("arenaGameMode") === "coop" ? "coop" : "pvp";
     let skipAutoReconnect = false;
 
+    // Client weapon metadata is seeded here so the HUD can render before the
+    // websocket welcome message replaces these values with server data.
     const WEAPON_META = {
       pistol: { name: "Pistol", ammo: null, reloadMs: 360, color: "#ffe27a" },
       sniper: { name: "Sniper", ammo: 6, reloadMs: 1450, color: "#9fe8ff" },
@@ -933,6 +935,7 @@
     let pendingRespawnAt = 0;
     let lastStateSentAt = 0;
     let lastShotAt = 0;
+    let fireHeld = false;
     let selectedPowerup = "speed";
     let currentWeapon = "pistol";
     let currentAmmo = 0;
@@ -970,6 +973,8 @@
       "Achievement unlocked: Bean brain"
     ];
 
+    // Render caches keyed by server id. Snapshots update these existing Three.js
+    // objects instead of recreating meshes every frame.
     const remotePlayers = new Map();
     const aiEntities = new Map();
     const playerStates = new Map();
@@ -1120,7 +1125,13 @@
     window.addEventListener("mousedown", (event) => {
       if (event.button !== 0) return;
       if (!document.pointerLockElement || dead || !connected || isGoat) return;
+      fireHeld = true;
       fire();
+    });
+
+    window.addEventListener("mouseup", (event) => {
+      if (event.button !== 0) return;
+      fireHeld = false;
     });
 
     window.addEventListener("contextmenu", (event) => event.preventDefault());
@@ -1142,7 +1153,10 @@
     }
 
     document.addEventListener("pointerlockchange", () => {
-      if (!document.pointerLockElement) showOverlay();
+      if (!document.pointerLockElement) {
+        fireHeld = false;
+        showOverlay();
+      }
     });
 
     addEventListener("resize", () => {
@@ -1203,6 +1217,8 @@
     }
 
     function applySnapshot(players, pickupSnapshot, botSnapshot, bossSnapshot, matchSnapshot) {
+      // One snapshot reconciles all server-owned state: local HUD data, remote
+      // avatars, pickups, enemies, match timers, and boss health.
       const seen = new Set();
       latestPlayers = players;
       latestPickups = pickupSnapshot;
@@ -1238,9 +1254,13 @@
     }
 
     function updateSelf(player) {
+      // Keep the first-person player, HUD, and ability state aligned with our
+      // public player record from the authoritative server snapshot.
       maxHp = player.maxHp || 100;
-      currentWeapon = player.currentWeapon || "pistol";
-      currentAmmo = player.ammo || 0;
+      if (isValidWeaponName(player.currentWeapon)) {
+        currentWeapon = player.currentWeapon;
+      }
+      currentAmmo = Number.isFinite(player.ammo) ? player.ammo : 0;
       nukes = player.nukes || 0;
       speedMultiplier = player.speedMultiplier || 1;
       hpEl.textContent = `${player.hp}/${maxHp}`;
@@ -1249,6 +1269,8 @@
       nukesEl.textContent = nukes;
 
       if (!player.spawned) {
+        // Connected does not mean spawned. The player enters the arena only
+        // after pressing Play.
         dead = false;
         lastHp = player.hp;
         isGoat = false;
@@ -1270,6 +1292,8 @@
       lastHp = player.hp;
 
       if (!player.alive) {
+        // Death is now manual-respawn only: show Play Again and wait for the
+        // button to send another "play" command.
         dead = true;
         pendingRespawnAt = player.respawnAt;
         showOverlay();
@@ -1404,8 +1428,10 @@
 
       if (msg.event === "pickup") {
         if (msg.player.id === myId) {
-          currentWeapon = msg.player.currentWeapon || "pistol";
-          currentAmmo = msg.player.ammo || 0;
+          if (isValidWeaponName(msg.player.currentWeapon)) {
+            currentWeapon = msg.player.currentWeapon;
+          }
+          currentAmmo = Number.isFinite(msg.player.ammo) ? msg.player.ammo : 0;
           nukes = msg.player.nukes || 0;
           updateWeaponHud();
           nukesEl.textContent = nukes;
@@ -1524,14 +1550,14 @@
     }
 
     function startPlaying() {
+      if (!connected) return;
+
       const name = cleanName(nameInputEl.value);
       nameInputEl.value = name;
       localStorage.setItem("arenaName", name);
       send({ type: "rename", name });
       send({ type: "powerup", powerup: selectedPowerup });
       send({ type: "play" });
-
-      if (!connected) return;
 
       overlayEl.classList.add("hidden");
       renderer.domElement.requestPointerLock();
@@ -1542,14 +1568,14 @@
       overlayEl.classList.remove("hidden");
 
       if (dead) {
-        const seconds = Math.max(0, Math.ceil((pendingRespawnAt - Date.now()) / 1000));
-        overlayTitleEl.textContent = seconds > 0 ? `Respawn in ${seconds}` : "Respawning";
-        playButtonEl.disabled = true;
-        requestAnimationFrame(showOverlay);
+        overlayTitleEl.textContent = "You died";
+        playButtonEl.textContent = "Play Again";
+        playButtonEl.disabled = !connected;
         return;
       }
 
       overlayTitleEl.textContent = "Arena";
+      playButtonEl.textContent = "Play";
       playButtonEl.disabled = !connected;
     }
 
@@ -1647,6 +1673,7 @@
       requestAnimationFrame(animate);
 
       const dt = Math.min(clock.getDelta(), 0.05);
+      if (fireHeld && currentWeapon === "machinegun") fire();
       moveLocalPlayer(dt);
       updateNetwork(dt);
       animateRemotePlayers(dt);
@@ -1684,6 +1711,8 @@
     function moveLocalPlayer(dt) {
       if (dead) return;
 
+      // Movement is predicted locally for responsiveness. The server still
+      // clamps the submitted position against map bounds and castle collision.
       if (Date.now() < myFrozenUntil) {
         const gy = walkableHeightAt(yaw.position.x, yaw.position.z, obstacleLayout, yaw.position.y) + 2;
         yaw.position.y = Math.max(gy, yaw.position.y);
@@ -1697,7 +1726,7 @@
         return;
       }
 
-      const speed = (move.sprint ? 23 : 14.5) * speedMultiplier * (aiming ? 0.58 : 1) * dt;
+      const speed = (move.sprint ? 18.5 : 11.5) * speedMultiplier * (aiming ? 0.58 : 1) * dt;
       const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(yaw.quaternion);
       const right = new THREE.Vector3(1, 0, 0).applyQuaternion(yaw.quaternion);
       forward.y = 0;
@@ -2426,6 +2455,10 @@
       return boosts[weapon] || (WEAPON_META[weapon] && WEAPON_META[weapon].name) || String(weapon || "weapon");
     }
 
+    function isValidWeaponName(weapon) {
+      return typeof weapon === "string" && !!WEAPON_META[weapon];
+    }
+
     function makeLabelTexture(text, color) {
       const canvas = document.createElement("canvas");
       canvas.width = 256;
@@ -2472,6 +2505,8 @@
     }
 
     function buildArena() {
+      // Static world rendering comes from the same deterministic obstacle layout
+      // as the server, keeping visible castle geometry aligned with collision.
       const rng = mulberry32(hashString(roomId));
       const groundGeo = new THREE.PlaneGeometry(600, 600, 132, 132);
       groundGeo.rotateX(-Math.PI / 2);
@@ -2629,6 +2664,24 @@
           return;
         }
 
+        if (obstacle.type === "bus" || obstacle.type === "truck" || obstacle.type === "car") {
+          const dims = obstacle.type === "bus"
+            ? { w: 12, h: 3.6, d: 4.2, color: 0xd2c874 }
+            : obstacle.type === "truck"
+              ? { w: 10, h: 3.2, d: 3.8, color: 0x9ac3ff }
+              : { w: 6.2, h: 2.4, d: 3.2, color: 0xd97964 };
+          const body = new THREE.Mesh(
+            new THREE.BoxGeometry(dims.w, dims.h, dims.d),
+            new THREE.MeshStandardMaterial({ color: dims.color, roughness: 0.62, metalness: 0.2 })
+          );
+          body.position.set(obstacle.x, obstacle.y + dims.h * 0.5, obstacle.z);
+          body.rotation.y = obstacle.ry || 0;
+          body.castShadow = true;
+          body.receiveShadow = true;
+          scene.add(body);
+          return;
+        }
+
         const rock = new THREE.Mesh(
           new THREE.DodecahedronGeometry(obstacle.size, 0),
           new THREE.MeshStandardMaterial({ color: index % 2 ? 0x72746f : 0x56636d, roughness: 0.96 })
@@ -2652,6 +2705,8 @@
     }
 
     function walkableHeightAt(x, z, obstacles = obstacleLayout, eyeY = Infinity) {
+      // Raised rooftops are walkable platforms. The eye-height check prevents
+      // the player from snapping onto a roof while walking underneath it.
       let height = terrainHeightAt(x, z);
       for (const obstacle of obstacles) {
         if (obstacle.type !== "platform") continue;
@@ -2679,19 +2734,15 @@
     }
 
     function buildObstacleLayout(roomId) {
+      // Deterministic procedural map: every client and the backend generate the
+      // same castle, cover, platforms, and jump pads from the room id.
       const rng = mulberry32(hashString(roomId));
       const obstacles = [];
 
       const platforms = [
-        { x: 0, z: 0, w: 46, d: 46, height: 12 },
-        { x: 0, z: -125, w: 72, d: 18, height: 7.2 },
-        { x: 0, z: 125, w: 72, d: 18, height: 7.2 },
-        { x: -125, z: 0, w: 18, d: 72, height: 7.2 },
-        { x: 125, z: 0, w: 18, d: 72, height: 7.2 },
-        { x: -62, z: -62, w: 38, d: 24, height: 5.4 },
-        { x: 62, z: 62, w: 38, d: 24, height: 5.4 },
-        { x: -62, z: 62, w: 24, d: 38, height: 5.4 },
-        { x: 62, z: -62, w: 24, d: 38, height: 5.4 }
+        { x: -86, z: -106, w: 58, d: 42, height: 7.4 },
+        { x: 86, z: 106, w: 58, d: 42, height: 7.4 },
+        { x: 0, z: 0, w: 32, d: 32, height: 4.8 }
       ];
 
       for (const platform of platforms) {
@@ -2708,14 +2759,10 @@
       }
 
       const jumpPads = [
-        { x: 23, z: 0, boost: 28 },
-        { x: -23, z: 0, boost: 28 },
-        { x: 0, z: -116, boost: 24 },
-        { x: 0, z: 116, boost: 24 },
-        { x: -116, z: 0, boost: 24 },
-        { x: 116, z: 0, boost: 24 },
-        { x: -62, z: -48, boost: 22 },
-        { x: 62, z: 48, boost: 22 }
+        { x: -70, z: -82, boost: 24 },
+        { x: 70, z: 82, boost: 24 },
+        { x: -12, z: -8, boost: 20 },
+        { x: 12, z: 8, boost: 20 }
       ];
 
       for (const jp of jumpPads) {
@@ -2731,14 +2778,16 @@
       }
 
       const wallSegments = [
-        { x: 0, z: -125, w: 150, d: 10 },
-        { x: 0, z: 125, w: 150, d: 10 },
-        { x: -125, z: 0, w: 10, d: 150 },
-        { x: 125, z: 0, w: 10, d: 150 },
-        { x: -62, z: -62, w: 44, d: 9 },
-        { x: 62, z: 62, w: 44, d: 9 },
-        { x: -62, z: 62, w: 9, d: 44 },
-        { x: 62, z: -62, w: 9, d: 44 }
+        { x: 0, z: -198, w: 340, d: 10 },
+        { x: 0, z: 198, w: 340, d: 10 },
+        { x: -198, z: 0, w: 10, d: 340 },
+        { x: 198, z: 0, w: 10, d: 340 },
+        { x: -122, z: -124, w: 6, d: 78 },
+        { x: -50, z: -132, w: 70, d: 6 },
+        { x: 122, z: 124, w: 6, d: 78 },
+        { x: 50, z: 132, w: 70, d: 6 },
+        { x: -108, z: 0, w: 6, d: 52 },
+        { x: 108, z: 0, w: 6, d: 52 }
       ];
 
       for (const segment of wallSegments) {
@@ -2761,9 +2810,7 @@
       }
 
       const towers = [
-        [-125, -125], [125, -125], [-125, 125], [125, 125],
-        [-62, -62], [62, 62], [-62, 62], [62, -62],
-        [0, 0]
+        [-165, -165], [165, -165], [-165, 165], [165, 165]
       ];
       for (const [x, z] of towers) {
         obstacles.push({
@@ -2771,20 +2818,24 @@
           x,
           z,
           y: terrainHeightAt(x, z),
-          radius: x === 0 && z === 0 ? 12 : 8,
-          height: x === 0 && z === 0 ? 18 : 12
+          radius: 6.8,
+          height: 10
         });
       }
 
-      for (let i = 0; i < 90; i += 1) {
-        const angle = rng() * Math.PI * 2;
-        const radius = 30 + rng() * 230;
-        const x = Math.cos(angle) * radius;
-        const z = Math.sin(angle) * radius;
-        if (Math.abs(x) < 12 && Math.abs(z) < 12) continue;
-
-        const trunkHeight = 2.8 + rng() * 1.6;
-        const canopyRadius = 1.25 + rng() * 0.85;
+      const lawns = [
+        { x: -120, z: -92 },
+        { x: -150, z: -56 },
+        { x: 120, z: 92 },
+        { x: 150, z: 56 },
+        { x: -26, z: -150 },
+        { x: 26, z: 150 }
+      ];
+      for (const spot of lawns) {
+        const x = spot.x + (rng() - 0.5) * 14;
+        const z = spot.z + (rng() - 0.5) * 14;
+        const trunkHeight = 3 + rng() * 1.2;
+        const canopyRadius = 1.3 + rng() * 0.65;
         obstacles.push({
           type: "tree",
           x,
@@ -2797,11 +2848,11 @@
         });
       }
 
-      for (let i = 0; i < 16; i += 1) {
-        const angle = (i / 16) * Math.PI * 2;
-        const radius = 42 + (i % 4) * 16;
-        const x = Math.cos(angle) * radius;
-        const z = Math.sin(angle) * radius;
+      const centerCrates = [
+        [-22, -8], [-12, -6], [12, 6], [22, 8],
+        [-38, 16], [38, -16], [-56, 0], [56, 0]
+      ];
+      for (const [x, z] of centerCrates) {
         obstacles.push({
           type: "crate",
           x,
@@ -2809,19 +2860,23 @@
           y: terrainHeightAt(x, z),
           radius: 2.45,
           height: 2.4,
-          angle
+          angle: Math.atan2(z, x)
         });
       }
 
-      for (let i = 0; i < 18; i += 1) {
-        const angle = rng() * Math.PI * 2;
-        const radius = 26 + rng() * 140;
-        const x = Math.cos(angle) * radius;
-        const z = Math.sin(angle) * radius;
-        const size = 1.5 + rng() * 2.8;
-        const scaleY = 0.55 + rng() * 0.9;
+      const vehicles = [
+        { x: -28, z: 0, type: "bus", size: 4.8, scaleY: 0.62 },
+        { x: 28, z: 0, type: "truck", size: 4.2, scaleY: 0.7 },
+        { x: -82, z: 32, type: "car", size: 2.8, scaleY: 0.75 },
+        { x: 82, z: -32, type: "car", size: 2.8, scaleY: 0.75 }
+      ];
+      for (const vehicle of vehicles) {
+        const size = vehicle.size;
+        const scaleY = vehicle.scaleY;
+        const x = vehicle.x;
+        const z = vehicle.z;
         obstacles.push({
-          type: "rock",
+          type: vehicle.type,
           x,
           z,
           y: terrainHeightAt(x, z),
@@ -2829,9 +2884,9 @@
           height: Math.max(1.2, size * scaleY),
           size,
           scaleY,
-          rx: rng() * 2,
-          ry: rng() * 2,
-          rz: rng() * 2
+          rx: 0,
+          ry: rng() * 0.5,
+          rz: 0
         });
       }
 
